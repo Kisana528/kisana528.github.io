@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>320x120 Pure Pixel Canvas</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            touch-action: none;
+            overscroll-behavior: none;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* ビューポート */
+        #viewport {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-image: 
+                linear-gradient(45deg, #2a2a2a 25%, transparent 25%), 
+                linear-gradient(-45deg, #2a2a2a 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #2a2a2a 75%), 
+                linear-gradient(-45deg, transparent 75%, #2a2a2a 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+            box-shadow: inset 0 0 50px rgba(0,0,0,0.8);
+            position: relative;
+            cursor: crosshair;
+            z-index: 1;
+        }
+
+        /* キャンバス */
+        canvas {
+            background-color: white;
+            image-rendering: pixelated; 
+            image-rendering: crisp-edges;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            transform-origin: 0 0;
+            position: absolute;
+            left: 0;
+            top: 0;
+            touch-action: none;
+            pointer-events: none; /* イベントはviewportで管理 */
+        }
+
+        /* ズームコントロール */
+        #zoom-controls {
+            z-index: 50;
+            touch-action: manipulation;
+        }
+
+        /* ツールバー */
+        #toolbar {
+            z-index: 100; /* 最前面に */
+            touch-action: manipulation; /* ボタン操作を許可 */
+        }
+
+        /* スライダー */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+            height: 24px; /* タップしやすく */
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 20px;
+            width: 20px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            margin-top: -8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #4b5563;
+            border-radius: 2px;
+        }
+
+        .tool-btn {
+            transition: all 0.1s;
+        }
+        .tool-btn.active {
+            background-color: #3b82f6;
+            color: white;
+            border-color: #3b82f6;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.8);
+            z-index: 200;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal.show {
+            display: flex;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col">
+
+    <!-- ヘッダー -->
+    <header class="bg-gray-900 px-4 py-2 flex justify-between items-center shadow-lg z-20 shrink-0 h-14 relative">
+        <h1 class="text-sm md:text-lg font-bold text-gray-100 flex items-center">
+            <i class="fas fa-border-all mr-2 text-blue-400"></i>
+            <span class="hidden md:inline">320x120 </span>Pixel Canvas
+        </h1>
+        <div class="flex gap-2">
+            <button id="dataBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded text-xs md:text-sm font-medium transition flex items-center">
+                <i class="fas fa-chart-bar mr-1"></i> データ分析
+            </button>
+            <button id="downloadBtn" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-xs md:text-sm font-medium transition flex items-center">
+                <i class="fas fa-download mr-1"></i> PNG保存
+            </button>
+        </div>
+    </header>
+
+    <!-- メインエリア -->
+    <div class="flex-grow relative overflow-hidden flex flex-col md:flex-row">
+        
+        <!-- キャンバスビューポート -->
+        <div id="viewport" class="flex-grow">
+            <canvas id="pixelCanvas" width="320" height="120"></canvas>
+            
+            <!-- ズームオーバーレイ -->
+            <div id="zoom-controls" class="absolute bottom-4 right-4 bg-gray-900/90 p-2 rounded-lg flex flex-col items-center gap-2 backdrop-blur-sm border border-gray-700 shadow-xl">
+                <button id="zoomIn" class="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-white hover:bg-gray-700 rounded transition"><i class="fas fa-plus"></i></button>
+                <span id="zoomLevel" class="text-xs font-mono text-blue-400 select-none">100%</span>
+                <button id="zoomOut" class="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-white hover:bg-gray-700 rounded transition"><i class="fas fa-minus"></i></button>
+            </div>
+        </div>
+
+        <!-- ツールバー -->
+        <div id="toolbar" class="bg-gray-800 border-t md:border-t-0 md:border-l border-gray-700 select-none shrink-0 w-full md:w-24 flex md:flex-col justify-between items-center p-2 md:p-4 gap-2">
+            
+            <div class="flex md:flex-col gap-2 w-full md:w-auto justify-center">
+                <!-- ツール群 -->
+                <div class="flex md:flex-col gap-2">
+                    <button id="penBtn" class="tool-btn active w-10 h-10 md:w-14 md:h-14 rounded-lg border border-gray-600 bg-gray-700 flex justify-center items-center text-lg md:text-2xl" title="ペン">
+                        <i class="fas fa-pen"></i>
+                    </button>
+                    <button id="eraserBtn" class="tool-btn w-10 h-10 md:w-14 md:h-14 rounded-lg border border-gray-600 bg-gray-700 flex justify-center items-center text-lg md:text-2xl" title="消しゴム">
+                        <i class="fas fa-eraser"></i>
+                    </button>
+                    <button id="handBtn" class="tool-btn w-10 h-10 md:w-14 md:h-14 rounded-lg border border-gray-600 bg-gray-700 flex justify-center items-center text-lg md:text-2xl" title="移動 (Hand)">
+                        <i class="fas fa-hand-paper"></i>
+                    </button>
+                </div>
+
+                <div class="w-px h-10 md:w-full md:h-px bg-gray-600 mx-1 md:mx-0 md:my-2"></div>
+
+                <!-- 形状切り替え -->
+                <button id="shapeBtn" class="tool-btn w-10 h-10 md:w-14 md:h-14 rounded-lg border border-gray-600 bg-gray-700 flex justify-center items-center text-lg md:text-xl" title="ブラシ形状">
+                    <i class="fas fa-square"></i>
+                </button>
+            </div>
+
+            <!-- サイズ設定 -->
+            <div class="flex flex-col items-center gap-1 w-32 md:w-full px-2">
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="text-[10px] text-gray-400">サイズ</span>
+                    <div id="sizePreview" class="bg-white border border-gray-500 pixel-preview" style="width: 4px; height: 4px; image-rendering: pixelated;"></div>
+                </div>
+                <input type="range" id="sizeSlider" min="1" max="10" value="1" step="1" class="w-full">
+                <span id="sizeValue" class="text-xs text-blue-300 font-bold mt-1">1px</span>
+            </div>
+
+            <!-- クリアボタン -->
+            <button id="clearBtn" class="w-12 h-10 md:w-full md:h-auto md:py-3 rounded-lg border border-red-800 bg-red-900/40 text-red-400 hover:bg-red-900/60 transition text-xs flex flex-col items-center justify-center whitespace-nowrap">
+                <i class="fas fa-trash-alt md:mb-1 text-base"></i>
+                <span class="hidden md:inline">全消去</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- データ分析モーダル -->
+    <div id="dataModal" class="modal p-4">
+        <div class="bg-gray-800 rounded-lg shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col border border-gray-700">
+            <div class="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-900 rounded-t-lg">
+                <h2 class="text-lg font-bold text-white"><i class="fas fa-microchip mr-2 text-indigo-400"></i>データ圧縮・解析</h2>
+                <button id="closeModal" class="text-gray-400 hover:text-white text-xl p-2"><i class="fas fa-times"></i></button>
+            </div>
+            
+            <div class="p-6 overflow-y-auto space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-gray-700 p-4 rounded-lg text-center">
+                        <div class="text-xs text-gray-400 mb-1">生データ (1bit/px)</div>
+                        <div id="rawSize" class="text-xl font-bold text-gray-200">- Bytes</div>
+                    </div>
+                    <div class="bg-gray-700 p-4 rounded-lg text-center border-2 border-green-700/50 relative overflow-hidden">
+                        <div class="absolute top-0 right-0 bg-green-600 text-white text-[10px] px-2 py-0.5 rounded-bl">FAX相当</div>
+                        <div class="text-xs text-gray-400 mb-1">圧縮後 (RLE)</div>
+                        <div id="compressedSize" class="text-xl font-bold text-green-400">- Bytes</div>
+                    </div>
+                    <div class="bg-gray-700 p-4 rounded-lg text-center">
+                        <div class="text-xs text-gray-400 mb-1">圧縮率</div>
+                        <div id="compressionRatio" class="text-xl font-bold text-blue-400">- %</div>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm text-gray-400 mb-2">生データ出力 (0=黒, 1=白)</label>
+                    <textarea id="rawDataOutput" class="w-full h-32 bg-gray-900 border border-gray-600 rounded p-2 text-[10px] font-mono text-gray-300 leading-none tracking-widest" readonly></textarea>
+                    <div class="flex justify-end mt-2">
+                        <button id="copyDataBtn" class="text-xs bg-gray-600 hover:bg-gray-500 text-white px-3 py-1 rounded"><i class="far fa-copy mr-1"></i>コピー</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('pixelCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const viewport = document.getElementById('viewport');
+
+        // キャンバス初期化
+        ctx.imageSmoothingEnabled = false;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 320, 120);
+
+        // 状態管理
+        const state = {
+            scale: 1,
+            panX: 0,
+            panY: 0,
+            isDrawing: false,
+            isPanning: false,
+            isPinching: false,
+            
+            // ピンチ用
+            pinchStartDist: 0,
+            pinchStartScale: 1,
+            pinchCenterWorldX: 0,
+            pinchCenterWorldY: 0,
+
+            tool: 'pen',
+            brushSize: 1,
+            brushShape: 'square', // 'square' or 'circle'
+            
+            lastX: 0,
+            lastY: 0,
+            lastClientX: 0,
+            lastClientY: 0
+        };
+
+        const ui = {
+            pen: document.getElementById('penBtn'),
+            eraser: document.getElementById('eraserBtn'),
+            hand: document.getElementById('handBtn'),
+            shape: document.getElementById('shapeBtn'),
+            shapeIcon: document.querySelector('#shapeBtn i'),
+            sizeSlider: document.getElementById('sizeSlider'),
+            sizeValue: document.getElementById('sizeValue'),
+            sizePreview: document.getElementById('sizePreview'),
+            zoomIn: document.getElementById('zoomIn'),
+            zoomOut: document.getElementById('zoomOut'),
+            zoomLevel: document.getElementById('zoomLevel'),
+            modal: document.getElementById('dataModal'),
+            rawDataOutput: document.getElementById('rawDataOutput'),
+            rawSize: document.getElementById('rawSize'),
+            compressedSize: document.getElementById('compressedSize'),
+            compressionRatio: document.getElementById('compressionRatio')
+        };
+
+        // --- 描画関数 ---
+
+        // 点（形状考慮）を描画
+        function drawPoint(cx, cy, size, shape) {
+            const r = Math.floor(size / 2);
+            const startX = Math.floor(cx - size / 2); // 中心合わせ
+            const startY = Math.floor(cy - size / 2);
+
+            if (shape === 'square' || size <= 2) { // 2px以下は四角の方が綺麗
+                ctx.fillRect(startX, startY, size, size);
+            } else {
+                // 円形 (簡易的なピクセル円)
+                const centerOffset = (size % 2 === 0) ? 0.5 : 0; // 偶数の場合の中心補正
+                const radiusSq = (size / 2) * (size / 2);
+
+                for (let y = 0; y < size; y++) {
+                    for (let x = 0; x < size; x++) {
+                        // 中心からの距離
+                        const dx = (x + 0.5) - (size / 2);
+                        const dy = (y + 0.5) - (size / 2);
+                        
+                        // 半径内なら描画 (少し緩めに判定して丸みを出す)
+                        if (dx * dx + dy * dy <= radiusSq + 0.5) {
+                            ctx.fillRect(startX + x, startY + y, 1, 1);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 線形補間描画
+        function plotLine(x0, y0, x1, y1) {
+            // 座標を整数化
+            x0 = Math.round(x0);
+            y0 = Math.round(y0);
+            x1 = Math.round(x1);
+            y1 = Math.round(y1);
+
+            const dx = Math.abs(x1 - x0);
+            const dy = Math.abs(y1 - y0);
+            const sx = (x0 < x1) ? 1 : -1;
+            const sy = (y0 < y1) ? 1 : -1;
+            let err = dx - dy;
+
+            ctx.fillStyle = (state.tool === 'pen') ? '#000000' : '#ffffff';
+            
+            while(true) {
+                drawPoint(x0, y0, state.brushSize, state.brushShape);
+
+                if ((x0 === x1) && (y0 === y1)) break;
+                const e2 = 2 * err;
+                if (e2 > -dy) { err -= dy; x0 += sx; }
+                if (e2 < dx) { err += dx; y0 += sy; }
+            }
+        }
+
+        // --- ビューポート & 座標系 ---
+
+        function centerCanvas() {
+            const rect = viewport.getBoundingClientRect();
+            // 初期表示: 画面に収まるように
+            const margin = 20;
+            const availableW = rect.width - margin;
+            const availableH = rect.height - margin;
+            
+            // フィットするスケールを計算
+            const scaleW = availableW / 320;
+            const scaleH = availableH / 120;
+            state.scale = Math.min(scaleW, scaleH, 2); // 最大2倍まで
+            if (state.scale < 0.5) state.scale = 0.5;
+
+            state.panX = (rect.width - 320 * state.scale) / 2;
+            state.panY = (rect.height - 120 * state.scale) / 2;
+            updateTransform();
+        }
+
+        function updateTransform() {
+            canvas.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.scale})`;
+            ui.zoomLevel.textContent = Math.round(state.scale * 100) + '%';
+        }
+
+        // スクリーン座標(clientX, Y) -> キャンバス内のローカル座標(0~320, 0~120)
+        function getLocalCoordinates(clientX, clientY) {
+            const rect = canvas.getBoundingClientRect(); // 現在の表示位置（変形後）
+            // 左上からの相対距離をスケールで割る
+            const x = (clientX - rect.left) / state.scale;
+            const y = (clientY - rect.top) / state.scale;
+            return { x, y };
+        }
+
+        // スクリーン座標(clientX, Y) -> キャンバス基準のワールド座標（拡大縮小の影響を受けない絶対位置）
+        // ピンチズームの計算で使用
+        function getWorldCoordinates(clientX, clientY) {
+            const rect = viewport.getBoundingClientRect();
+            const viewportRelX = clientX - rect.left;
+            const viewportRelY = clientY - rect.top;
+            
+            // worldX = (viewportRelX - panX) / scale
+            return {
+                x: (viewportRelX - state.panX) / state.scale,
+                y: (viewportRelY - state.panY) / state.scale
+            };
+        }
+
+        // --- 入力イベントハンドラ ---
+
+        function getDistance(touches) {
+            return Math.hypot(
+                touches[0].clientX - touches[1].clientX,
+                touches[0].clientY - touches[1].clientY
+            );
+        }
+
+        function getCenter(touches) {
+            return {
+                x: (touches[0].clientX + touches[1].clientX) / 2,
+                y: (touches[0].clientY + touches[1].clientY) / 2
+            };
+        }
+
+        function handleStart(e, isTouch) {
+            // ツールバーなどの操作を除外
+            if (e.target.closest('#toolbar') || e.target.closest('#zoom-controls')) return;
+
+            // 2本指タッチ (ピンチ開始)
+            if (isTouch && e.touches.length === 2) {
+                state.isPinching = true;
+                state.isDrawing = false;
+                state.isPanning = false;
+                
+                state.pinchStartDist = getDistance(e.touches);
+                state.pinchStartScale = state.scale;
+                
+                // ピンチ中心点の「画像上の位置（ワールド座標）」を記憶
+                const center = getCenter(e.touches);
+                const worldPos = getWorldCoordinates(center.x, center.y);
+                state.pinchCenterWorldX = worldPos.x;
+                state.pinchCenterWorldY = worldPos.y;
+                
+                // パン用の基準点も更新
+                state.lastClientX = center.x;
+                state.lastClientY = center.y;
+                return;
+            }
+
+            const clientX = isTouch ? e.touches[0].clientX : e.clientX;
+            const clientY = isTouch ? e.touches[0].clientY : e.clientY;
+            const isRightClick = !isTouch && e.button === 2;
+            
+            if (state.tool === 'hand' || isRightClick || (isTouch && e.touches.length > 1)) {
+                state.isPanning = true;
+                viewport.style.cursor = 'grabbing';
+                state.lastClientX = clientX;
+                state.lastClientY = clientY;
+            } else {
+                state.isDrawing = true;
+                const coords = getLocalCoordinates(clientX, clientY);
+                state.lastX = coords.x;
+                state.lastY = coords.y;
+                plotLine(coords.x, coords.y, coords.x, coords.y);
+                state.lastClientX = clientX;
+                state.lastClientY = clientY;
+            }
+        }
+
+        function handleMove(e, isTouch) {
+            if (e.target.closest('#toolbar') || e.target.closest('#zoom-controls')) return;
+
+            // ピンチ操作 (ズーム + 移動)
+            if (state.isPinching && isTouch && e.touches.length === 2) {
+                e.preventDefault();
+                
+                const currentDist = getDistance(e.touches);
+                const center = getCenter(e.touches); // 現在の指の中心（スクリーン座標）
+                
+                // 1. 新しいスケールを決定
+                const scaleRatio = currentDist / state.pinchStartDist;
+                let newScale = state.pinchStartScale * scaleRatio;
+                newScale = Math.max(0.5, Math.min(newScale, 10)); // 制限
+
+                // 2. ズーム中心を維持するためのパン位置を計算
+                // Logic: 現在の指の中心(center)の下に、開始時に記憶した画像上の点(pinchCenterWorld)が来るように配置する
+                // center.x = panX + worldX * scale
+                // => panX = center.x - worldX * scale
+                
+                const rect = viewport.getBoundingClientRect();
+                const viewportRelX = center.x - rect.left;
+                const viewportRelY = center.y - rect.top;
+
+                state.scale = newScale;
+                state.panX = viewportRelX - state.pinchCenterWorldX * newScale;
+                state.panY = viewportRelY - state.pinchCenterWorldY * newScale;
+
+                updateTransform();
+                return;
+            }
+
+            const clientX = isTouch ? e.touches[0].clientX : e.clientX;
+            const clientY = isTouch ? e.touches[0].clientY : e.clientY;
+
+            if (state.isPanning) {
+                e.preventDefault();
+                const dx = clientX - state.lastClientX;
+                const dy = clientY - state.lastClientY;
+                state.panX += dx;
+                state.panY += dy;
+                updateTransform();
+                state.lastClientX = clientX;
+                state.lastClientY = clientY;
+            } else if (state.isDrawing) {
+                e.preventDefault();
+                const coords = getLocalCoordinates(clientX, clientY);
+                plotLine(state.lastX, state.lastY, coords.x, coords.y);
+                state.lastX = coords.x;
+                state.lastY = coords.y;
+                state.lastClientX = clientX;
+                state.lastClientY = clientY;
+            }
+        }
+
+        function handleEnd() {
+            state.isDrawing = false;
+            state.isPanning = false;
+            state.isPinching = false;
+            viewport.style.cursor = state.tool === 'hand' ? 'grab' : 'crosshair';
+        }
+
+        // --- イベントリスナー ---
+        viewport.addEventListener('mousedown', (e) => handleStart(e, false));
+        window.addEventListener('mousemove', (e) => {
+            if(state.isDrawing || state.isPanning) handleMove(e, false);
+        });
+        window.addEventListener('mouseup', handleEnd);
+        viewport.addEventListener('contextmenu', e => e.preventDefault());
+
+        viewport.addEventListener('touchstart', (e) => handleStart(e, true), { passive: false });
+        viewport.addEventListener('touchmove', (e) => handleMove(e, true), { passive: false });
+        viewport.addEventListener('touchend', handleEnd);
+
+        // ボタン制御 (スマホでの反応改善)
+        function attachButtonEvent(id, handler) {
+            const btn = document.getElementById(id);
+            // clickで統一（タッチデバイスでもclickは発火するが、touchstartのpreventDefaultの影響を受けないように注意）
+            // ここではtouch-action: manipulationをCSSで指定しているのでclickでOK
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation(); // キャンバスへの伝播防止
+                handler(e);
+            });
+            // タッチ開始時にキャンバス描画が走らないようにバブリングを止める
+            btn.addEventListener('touchstart', (e) => e.stopPropagation(), {passive: true});
+        }
+
+        // ツール
+        attachButtonEvent('penBtn', () => setTool('pen'));
+        attachButtonEvent('eraserBtn', () => setTool('eraser'));
+        attachButtonEvent('handBtn', () => setTool('hand'));
+        
+        // 形状切り替え
+        attachButtonEvent('shapeBtn', () => {
+            state.brushShape = (state.brushShape === 'square') ? 'circle' : 'square';
+            // アイコン更新
+            if(state.brushShape === 'square') {
+                ui.shapeIcon.className = 'fas fa-square';
+            } else {
+                ui.shapeIcon.className = 'fas fa-circle';
+            }
+            updateSizePreview();
+        });
+
+        // ズーム
+        attachButtonEvent('zoomIn', () => applyZoom(0.5));
+        attachButtonEvent('zoomOut', () => applyZoom(-0.5));
+
+        // その他
+        attachButtonEvent('clearBtn', () => {
+            if(confirm('全消去しますか？')) {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, 320, 120);
+            }
+        });
+
+        attachButtonEvent('downloadBtn', () => {
+            const link = document.createElement('a');
+            link.download = 'pixelart_320x120.png';
+            link.href = canvas.toDataURL();
+            link.click();
+        });
+
+        attachButtonEvent('dataBtn', analyzeData);
+        attachButtonEvent('closeModal', () => ui.modal.classList.remove('show'));
+        attachButtonEvent('copyDataBtn', () => {
+            ui.rawDataOutput.select();
+            document.execCommand('copy');
+            alert('コピーしました');
+        });
+
+        // スライダー
+        ui.sizeSlider.addEventListener('input', (e) => {
+            state.brushSize = parseInt(e.target.value);
+            ui.sizeValue.textContent = state.brushSize + 'px';
+            updateSizePreview();
+        });
+        ui.sizeSlider.addEventListener('touchstart', (e) => e.stopPropagation(), {passive: true});
+
+        // ズーム処理（中心基準）
+        viewport.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const delta = -Math.sign(e.deltaY) * 0.2;
+            applyZoom(delta, e.clientX, e.clientY);
+        }, { passive: false });
+
+        function applyZoom(delta, centerX, centerY) {
+            const oldScale = state.scale;
+            let newScale = oldScale + delta;
+            newScale = Math.max(0.5, Math.min(newScale, 10));
+
+            const rect = viewport.getBoundingClientRect();
+            // 指定がなければ画面中心
+            if (centerX === undefined) centerX = rect.left + rect.width / 2;
+            if (centerY === undefined) centerY = rect.top + rect.height / 2;
+
+            // マウス位置のワールド座標を計算
+            // worldX = (screenX - panX) / oldScale
+            const worldX = (centerX - rect.left - state.panX) / oldScale;
+            const worldY = (centerY - rect.top - state.panY) / oldScale;
+
+            // 新しいパン位置を逆算
+            // screenX = panX_new + worldX * newScale
+            // panX_new = screenX - worldX * newScale
+            const newPanX = (centerX - rect.left) - worldX * newScale;
+            const newPanY = (centerY - rect.top) - worldY * newScale;
+
+            state.scale = newScale;
+            state.panX = newPanX;
+            state.panY = newPanY;
+
+            updateTransform();
+        }
+
+        function setTool(toolName) {
+            state.tool = toolName;
+            [ui.pen, ui.eraser, ui.hand].forEach(btn => btn.classList.remove('active'));
+            if(toolName === 'pen') ui.pen.classList.add('active');
+            if(toolName === 'eraser') ui.eraser.classList.add('active');
+            if(toolName === 'hand') ui.hand.classList.add('active');
+            
+            viewport.style.cursor = toolName === 'hand' ? 'grab' : 'crosshair';
+            updateSizePreview();
+        }
+
+        function updateSizePreview() {
+            ui.sizePreview.style.width = state.brushSize + 'px';
+            ui.sizePreview.style.height = state.brushSize + 'px';
+            ui.sizePreview.style.backgroundColor = state.tool === 'eraser' ? 'white' : 'black';
+            ui.sizePreview.style.borderColor = state.tool === 'eraser' ? '#ccc' : 'transparent';
+            ui.sizePreview.style.borderRadius = (state.brushShape === 'circle' && state.brushSize > 2) ? '50%' : '0%';
+        }
+
+        // データ分析
+        function analyzeData() {
+            const width = 320;
+            const height = 120;
+            const imageData = ctx.getImageData(0, 0, width, height);
+            const data = imageData.data;
+            
+            let binaryString = "";
+            let bitCount = width * height;
+            
+            for (let i = 0; i < data.length; i += 4) {
+                const isWhite = data[i] > 128;
+                binaryString += isWhite ? "1" : "0";
+                if (((i/4) + 1) % width === 0) binaryString += "\n";
+            }
+
+            const rawSizeBytes = bitCount / 8;
+
+            let compressedBytes = 0;
+            let currentVal = '1';
+            let runLength = 0;
+            const flatStr = binaryString.replace(/\n/g, '');
+            
+            for (let i = 0; i < flatStr.length; i++) {
+                if (flatStr[i] === currentVal) {
+                    runLength++;
+                    if (runLength === 255) {
+                        compressedBytes += 2;
+                        runLength = 0;
+                    }
+                } else {
+                    compressedBytes++;
+                    currentVal = flatStr[i];
+                    runLength = 1;
+                }
+            }
+            compressedBytes++;
+
+            ui.rawDataOutput.value = binaryString;
+            ui.rawSize.textContent = rawSizeBytes.toLocaleString() + " B";
+            ui.compressedSize.textContent = compressedBytes.toLocaleString() + " B";
+            
+            const ratio = (1 - (compressedBytes / rawSizeBytes)) * 100;
+            ui.compressionRatio.textContent = ratio.toFixed(1) + " %";
+            ui.modal.classList.add('show');
+        }
+
+        // 初期化
+        centerCanvas();
+        setTool('pen');
+    </script>
+</body>
+</html>

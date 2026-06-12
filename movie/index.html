@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>AVIエンコーダー（非圧縮 修正版）</title>
+</head>
+<body>
+    <h2>非圧縮AVIファイル生成（完全版）</h2>
+    <canvas id="canvas" width="320" height="240" style="border:1px solid #000;"></canvas>
+    <br>
+    <button id="btnDownload" style="padding: 10px; margin-top: 10px;">AVIファイルを生成してダウンロード</button>
+    <p id="status"></p>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const btn = document.getElementById('btnDownload');
+    const status = document.getElementById('status');
+
+    const width = 320;
+    const height = 240;
+    const fps = 30;
+    const totalFrames = 60; // 2秒分
+    const frameSize = width * height * 3; // 1フレームあたりのバイト数(RGB24)
+
+    btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        status.innerText = "エンコード中...";
+
+        const frameDataList = [];
+
+        // 1. フレームの生成とピクセルデータの抽出
+        for (let i = 0; i < totalFrames; i++) {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, width, height);
+            ctx.fillStyle = `hsl(${(i * 10) % 360}, 70%, 50%)`;
+            ctx.fillRect(i * 4, 100, 50, 50);
+
+            const imgData = ctx.getImageData(0, 0, width, height).data;
+            const bgrBuffer = new Uint8Array(frameSize);
+            
+            // 下から上へ(Bottom-up)、かつBGR順に並び替え
+            let ptr = 0;
+            for (let y = height - 1; y >= 0; y--) {
+                for (let x = 0; x < width; x++) {
+                    const offset = (y * width + x) * 4;
+                    bgrBuffer[ptr++] = imgData[offset + 2]; // B
+                    bgrBuffer[ptr++] = imgData[offset + 1]; // G
+                    bgrBuffer[ptr++] = imgData[offset + 0]; // R
+                }
+            }
+            frameDataList.push(bgrBuffer);
+            await new Promise(r => setTimeout(r, 5)); // 描画更新のためのウェイト
+        }
+
+        // 2. AVIファイルのバイナリ構築 (RIFF構造を完全再現)
+        const headerSize = 224; // RIFF + hdrl + moviヘッダの合計サイズ
+        const movieDataSize = totalFrames * (8 + frameSize); // '00db'(4) + サイズ(4) + データ
+        const fileSize = headerSize + movieDataSize;
+        const buffer = new ArrayBuffer(fileSize);
+        const view = new DataView(buffer);
+        let pos = 0;
+
+        // --- 文字列書き込みヘルパー関数 ---
+        const writeStr = (str) => {
+            for (let i = 0; i < str.length; i++) view.setUint8(pos++, str.charCodeAt(i));
+        };
+
+        // =======================
+        // RIFF Header (12 bytes)
+        // =======================
+        writeStr('RIFF');
+        view.setUint32(pos, fileSize - 8, true); pos += 4;
+        writeStr('AVI ');
+
+        // =======================
+        // LIST hdrl (200 bytes)
+        // =======================
+        writeStr('LIST');
+        view.setUint32(pos, 192, true); pos += 4;
+        writeStr('hdrl');
+
+        // 1. avih (Main AVI Header - 64 bytes)
+        writeStr('avih');
+        view.setUint32(pos, 56, true); pos += 4; // avihデータのサイズ
+        view.setUint32(pos + 0, Math.floor(1000000 / fps), true); // 1フレームのマイクロ秒
+        view.setUint32(pos + 4, fps * frameSize, true); // 1秒あたりの最大バイト数
+        view.setUint32(pos + 12, 0, true); // フラグ
+        view.setUint32(pos + 16, totalFrames, true); // 総フレーム数
+        view.setUint32(pos + 24, 1, true); // ストリーム数
+        view.setUint32(pos + 28, frameSize, true); // 推奨バッファサイズ
+        view.setUint32(pos + 32, width, true); // 幅
+        view.setUint32(pos + 36, height, true); // 高さ
+        pos += 56;
+
+        // 2. LIST strl (Stream List - 124 bytes)
+        writeStr('LIST');
+        view.setUint32(pos, 116, true); pos += 4;
+        writeStr('strl');
+
+        // 2-a. strh (Stream Header - 64 bytes) 【前回欠けていた部分】
+        writeStr('strh');
+        view.setUint32(pos, 56, true); pos += 4;
+        // fccType 'vids' (映像ストリーム)
+        view.setUint8(pos+0, 118); view.setUint8(pos+1, 105); view.setUint8(pos+2, 100); view.setUint8(pos+3, 115);
+        // fccHandler 'DIB ' (Device Independent Bitmap / 非圧縮)
+        view.setUint8(pos+4, 68); view.setUint8(pos+5, 73); view.setUint8(pos+6, 66); view.setUint8(pos+7, 32);
+        view.setUint32(pos + 20, 1, true); // Scale
+        view.setUint32(pos + 24, fps, true); // Rate
+        view.setUint32(pos + 32, totalFrames, true); // Length
+        view.setUint32(pos + 36, frameSize, true); // SuggestedBufferSize
+        view.setUint16(pos + 52, width, true); // 描画枠 右
+        view.setUint16(pos + 54, height, true); // 描画枠 下
+        pos += 56;
+
+        // 2-b. strf (Stream Format - 48 bytes) 【前回欠けていた部分】
+        writeStr('strf');
+        view.setUint32(pos, 40, true); pos += 4; // BITMAPINFOHEADERのサイズ
+        view.setUint32(pos + 0, 40, true); // biSize
+        view.setInt32(pos + 4, width, true); // biWidth
+        view.setInt32(pos + 8, height, true); // biHeight
+        view.setUint16(pos + 12, 1, true); // biPlanes
+        view.setUint16(pos + 14, 24, true); // biBitCount (RGB 24bit)
+        view.setUint32(pos + 16, 0, true); // biCompression (BI_RGB = 無圧縮)
+        view.setUint32(pos + 20, frameSize, true); // biSizeImage
+        pos += 40;
+
+        // =======================
+        // LIST movi (Movie Data)
+        // =======================
+        writeStr('LIST');
+        view.setUint32(pos, movieDataSize + 4, true); pos += 4;
+        writeStr('movi');
+
+        // 各フレームを書き込む
+        for (const frame of frameDataList) {
+            writeStr('00db'); // 無圧縮ビデオストリームチャンク
+            view.setUint32(pos, frame.length, true); pos += 4;
+            
+            const uint8View = new Uint8Array(buffer, pos, frame.length);
+            uint8View.set(frame);
+            pos += frame.length;
+        }
+
+        // 3. ダウンロード処理
+        const blob = new Blob([buffer], { type: 'video/avi' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'raw_video_fixed.avi';
+        a.click();
+
+        status.innerText = "ダウンロード完了！ 今度こそ再生できるはずです。";
+        btn.disabled = false;
+    });
+</script>
+</body>
+</html>
